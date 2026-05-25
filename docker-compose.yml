@@ -5,3 +5,5 @@ services:
       - .env
     ports:
       - "8080:8080"
+    volumes:
+      - ${LOCAL_MODEL_CONFIG_PATH:-./config.example.yaml}:/app/config.yaml:ro

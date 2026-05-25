@@ -9,7 +9,7 @@ WORKDIR /app
 
 RUN addgroup --system app && adduser --system --ingroup app app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md config.example.yaml ./
 COPY claude_code_proxy ./claude_code_proxy
 COPY main.py ./
 

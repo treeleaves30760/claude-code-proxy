@@ -13,7 +13,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import __version__
-from .config import Settings, get_settings
+from .config import ResolvedRoute, Settings, get_settings
+from .openai_compat import prepare_openai_compatible_request, restore_public_model
 from .transform import (
     ToolNameMapper,
     anthropic_to_openai_request,
@@ -29,7 +30,7 @@ from .transform import (
 
 logger = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="Claude Code OpenAI Proxy", version=__version__)
+app = FastAPI(title="Claude Code Multi-Provider Proxy", version=__version__)
 
 
 async def verify_proxy_auth(
@@ -78,9 +79,17 @@ async def root(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
         "status": "ok",
         "ready": settings.is_ready(),
         "version": __version__,
-        "upstream": settings.openai_api_endpoint,
-        "model": settings.openai_model or "request-model",
-        "endpoints": ["/v1/messages", "/v1/messages/count_tokens", "/v1/models", "/healthz", "/readyz"],
+        "default_model": settings.routing.default_model,
+        "providers": list(settings.routing.providers),
+        "models": settings.public_model_ids(),
+        "endpoints": [
+            "/v1/messages",
+            "/v1/messages/count_tokens",
+            "/v1/chat/completions",
+            "/v1/models",
+            "/healthz",
+            "/readyz",
+        ],
     }
 
 
@@ -94,8 +103,8 @@ async def healthz(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     return {
         "status": "ok",
         "version": __version__,
-        "upstream": settings.openai_api_endpoint,
-        "model": settings.openai_model or "request-model",
+        "default_model": settings.routing.default_model,
+        "providers": list(settings.routing.providers),
     }
 
 
@@ -105,27 +114,22 @@ async def readyz(settings: Settings = Depends(get_settings)) -> JSONResponse:
         status_code=status.HTTP_200_OK if settings.is_ready() else status.HTTP_503_SERVICE_UNAVAILABLE,
         content={
             "status": "ready" if settings.is_ready() else "not_ready",
-            "openai_api_endpoint_configured": bool(settings.openai_api_endpoint),
-            "openai_api_key_configured": bool(settings.openai_api_key),
-            "openai_model_configured": bool(settings.openai_model),
+            "default_model": settings.routing.default_model,
+            "routes": settings.readiness(),
         },
     )
 
 
 @app.get("/v1/models", dependencies=[Depends(verify_proxy_auth)])
 async def list_models(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
-    model_ids: list[str] = []
-    model_ids.extend(settings.public_models)
-    model_ids.extend(str(model) for model in settings.model_mapping)
-    if settings.model_passthrough and settings.openai_model:
-        model_ids.append(settings.openai_model)
-    if not model_ids:
-        model_ids.append(settings.openai_model or "openai-model")
-
+    model_ids = settings.public_model_ids()
     data = [
         {
-            "type": "model",
             "id": model_id,
+            "object": "model",
+            "created": 1704067200,
+            "owned_by": "claude-code-proxy",
+            "type": "model",
             "display_name": model_id,
             "created_at": "2024-01-01T00:00:00Z",
         }
@@ -143,8 +147,11 @@ async def list_models(settings: Settings = Depends(get_settings)) -> dict[str, A
 @app.get("/v1/models/{model_id}", dependencies=[Depends(verify_proxy_auth)])
 async def retrieve_model(model_id: str) -> dict[str, Any]:
     return {
-        "type": "model",
         "id": model_id,
+        "object": "model",
+        "created": 1704067200,
+        "owned_by": "claude-code-proxy",
+        "type": "model",
         "display_name": model_id,
         "created_at": "2024-01-01T00:00:00Z",
     }
@@ -163,35 +170,32 @@ async def create_message(request: Request, settings: Settings = Depends(get_sett
     body = await read_json_object(request)
     if not body.get("messages"):
         raise HTTPException(status_code=400, detail="messages is required")
-    if not settings.is_ready():
-        missing = []
-        if not settings.openai_api_endpoint:
-            missing.append("OPENAI_API_ENDPOINT")
-        if settings.require_openai_api_key and not settings.openai_api_key:
-            missing.append("OPENAI_API_KEY")
-        if not settings.openai_model:
-            missing.append("OPENAI_MODEL")
+
+    route = settings.resolve_route(as_optional_str(body.get("model")))
+    if not route.is_ready():
         return anthropic_error_response(
             503,
-            "Proxy is not ready. Missing: " + ", ".join(missing),
+            "Proxy route is not ready. Missing: " + ", ".join(route.readiness_errors()),
             "api_error",
         )
 
     tool_name_mapper = ToolNameMapper()
     try:
-        upstream_payload = anthropic_to_openai_request(body, settings, tool_name_mapper)
+        upstream_payload = anthropic_to_openai_request(body, route, tool_name_mapper)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(
-        "proxying message request upstream_model=%s stream=%s",
+        "proxying anthropic message provider=%s upstream_model=%s public_model=%s stream=%s",
+        route.provider.name,
         upstream_payload.get("model"),
+        route.public_model,
         bool(upstream_payload.get("stream")),
     )
 
     if upstream_payload.get("stream"):
         return StreamingResponse(
-            stream_openai_as_anthropic(body, upstream_payload, settings, tool_name_mapper),
+            stream_openai_as_anthropic(body, upstream_payload, settings, route, tool_name_mapper),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -203,8 +207,8 @@ async def create_message(request: Request, settings: Settings = Depends(get_sett
     try:
         async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
             upstream_response = await client.post(
-                settings.chat_completions_url(),
-                headers=settings.upstream_headers(),
+                route.chat_completions_url,
+                headers=route.upstream_headers(),
                 json=upstream_payload,
             )
     except httpx.TimeoutException:
@@ -219,13 +223,71 @@ async def create_message(request: Request, settings: Settings = Depends(get_sett
         upstream_json = upstream_response.json()
     except json.JSONDecodeError:
         return anthropic_error_response(502, "OpenAI upstream returned non-JSON response", "api_error")
-    return openai_to_anthropic_response(upstream_json, body, settings, tool_name_mapper)
+    return openai_to_anthropic_response(upstream_json, body, route, tool_name_mapper)
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(verify_proxy_auth)])
+async def create_chat_completion(request: Request, settings: Settings = Depends(get_settings)) -> Any:
+    body = await read_json_object(request)
+    if not body.get("messages"):
+        return openai_proxy_error_response(400, "messages is required", "invalid_request_error")
+
+    incoming_model = as_optional_str(body.get("model"))
+    route = settings.resolve_route(incoming_model)
+    if not route.is_ready():
+        return openai_proxy_error_response(
+            503,
+            "Proxy route is not ready. Missing: " + ", ".join(route.readiness_errors()),
+            "api_error",
+        )
+
+    upstream_payload = prepare_openai_compatible_request(body, route)
+    logger.info(
+        "proxying openai-compatible chat provider=%s upstream_model=%s public_model=%s stream=%s",
+        route.provider.name,
+        upstream_payload.get("model"),
+        route.public_model,
+        bool(upstream_payload.get("stream")),
+    )
+
+    if upstream_payload.get("stream"):
+        return StreamingResponse(
+            stream_openai_passthrough(upstream_payload, settings, route),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+            upstream_response = await client.post(
+                route.chat_completions_url,
+                headers=route.upstream_headers(),
+                json=upstream_payload,
+            )
+    except httpx.TimeoutException:
+        return openai_proxy_error_response(504, "Upstream request timed out", "api_error")
+    except httpx.HTTPError as exc:
+        return openai_proxy_error_response(502, f"Upstream request failed: {exc}", "api_error")
+
+    if upstream_response.status_code >= 400:
+        return openai_error_response(upstream_response, anthropic=False)
+
+    try:
+        response_json = upstream_response.json()
+    except json.JSONDecodeError:
+        return openai_proxy_error_response(502, "Upstream returned non-JSON response", "api_error")
+    return restore_public_model(response_json, incoming_model or route.public_model)
 
 
 async def stream_openai_as_anthropic(
     original_body: dict[str, Any],
     upstream_payload: dict[str, Any],
     settings: Settings,
+    route: ResolvedRoute,
     tool_name_mapper: ToolNameMapper,
 ) -> AsyncIterator[str]:
     message_id = new_message_id()
@@ -238,7 +300,7 @@ async def stream_openai_as_anthropic(
                 "type": "message",
                 "role": "assistant",
                 "content": [],
-                "model": str(original_body.get("model") or settings.resolved_model(None)),
+                "model": str(original_body.get("model") or route.public_model),
                 "stop_reason": None,
                 "stop_sequence": None,
                 "usage": {"input_tokens": 0, "output_tokens": 0},
@@ -254,8 +316,8 @@ async def stream_openai_as_anthropic(
         async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
             async with client.stream(
                 "POST",
-                settings.chat_completions_url(),
-                headers=settings.upstream_headers(),
+                route.chat_completions_url,
+                headers=route.upstream_headers(),
                 json=upstream_payload,
             ) as response:
                 if response.status_code >= 400:
@@ -330,6 +392,47 @@ async def stream_openai_as_anthropic(
         },
     )
     yield sse_event("message_stop", {"type": "message_stop"})
+
+
+async def stream_openai_passthrough(
+    upstream_payload: dict[str, Any], settings: Settings, route: ResolvedRoute
+) -> AsyncIterator[str]:
+    try:
+        async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
+            async with client.stream(
+                "POST",
+                route.chat_completions_url,
+                headers=route.upstream_headers(),
+                json=upstream_payload,
+            ) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    yield "data: " + compact_json(
+                        {
+                            "error": {
+                                "type": map_http_status_to_anthropic_error(response.status_code),
+                                "message": decode_error_body(body),
+                            }
+                        }
+                    ) + "\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk.decode("utf-8", errors="replace")
+    except asyncio.CancelledError:
+        raise
+    except httpx.TimeoutException:
+        yield "data: " + compact_json(
+            {"error": {"type": "api_error", "message": "Upstream stream timed out"}}
+        ) + "\n\n"
+        yield "data: [DONE]\n\n"
+    except httpx.HTTPError as exc:
+        yield "data: " + compact_json(
+            {"error": {"type": "api_error", "message": f"Upstream stream failed: {exc}"}}
+        ) + "\n\n"
+        yield "data: [DONE]\n\n"
 
 
 class StreamState:
@@ -509,18 +612,25 @@ def first_stream_choice(chunk: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def openai_error_response(response: httpx.Response) -> JSONResponse:
-    return anthropic_error_response(
-        response.status_code,
-        decode_error_body(response.content),
-        map_http_status_to_anthropic_error(response.status_code),
-    )
+def openai_error_response(response: httpx.Response, anthropic: bool = True) -> JSONResponse:
+    error_type = map_http_status_to_anthropic_error(response.status_code)
+    message = decode_error_body(response.content)
+    if anthropic:
+        return anthropic_error_response(response.status_code, message, error_type)
+    return openai_proxy_error_response(response.status_code, message, error_type)
 
 
 def anthropic_error_response(status_code: int, message: str, error_type: str = "api_error") -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"type": "error", "error": {"type": error_type, "message": message}},
+    )
+
+
+def openai_proxy_error_response(status_code: int, message: str, error_type: str = "api_error") -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"type": error_type, "message": message}},
     )
 
 
@@ -553,6 +663,12 @@ def decode_error_body(body: bytes) -> str:
     except json.JSONDecodeError:
         pass
     return body.decode("utf-8", errors="replace")
+
+
+def as_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def main() -> None:

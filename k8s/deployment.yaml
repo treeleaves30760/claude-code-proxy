@@ -22,6 +22,8 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: MODEL_CONFIG_PATH
+              value: /etc/claude-code-proxy/config.yaml
             - name: OPENAI_API_ENDPOINT
               value: https://api.openai.com/v1
             - name: OPENAI_CHAT_COMPLETIONS_PATH
@@ -48,6 +50,18 @@ spec:
                 secretKeyRef:
                   name: claude-code-proxy-secrets
                   key: PROXY_AUTH_TOKEN
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-proxy-secrets
+                  key: OPENROUTER_API_KEY
+                  optional: true
+            - name: OLLAMA_BASE_URL
+              value: http://ollama:11434/v1
+          volumeMounts:
+            - name: model-config
+              mountPath: /etc/claude-code-proxy
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /readyz
@@ -67,3 +81,8 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: model-config
+          configMap:
+            name: claude-code-proxy-config
+            optional: true

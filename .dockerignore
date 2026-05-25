@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .env
+config.yaml
 .pytest_cache/
 .ruff_cache/
 dist/
