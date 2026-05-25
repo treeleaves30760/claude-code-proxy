@@ -1,44 +1,44 @@
 # Claude Code Multi-Provider Proxy
 
-English | [繁體中文](README-zh-TW.md)
+[English](README.md) | 繁體中文
 
-A multi-provider AI API proxy for Claude Code, opencode, and OpenAI-compatible clients. It exposes both Anthropic Messages API endpoints and OpenAI-compatible Chat Completions endpoints, then routes requests to OpenAI, OpenRouter, Ollama, or any compatible upstream through YAML model routing.
+這是一個多 provider AI API proxy。它同時提供 Anthropic Messages API 與 OpenAI-compatible Chat Completions API，讓 Claude Code、opencode 與其他 OpenAI-compatible client 都能透過同一個服務轉接到 OpenAI、OpenRouter、Ollama 或其他相容廠商。
 
-## Features
+目前支援：
 
 - `POST /v1/messages`
 - `POST /v1/messages/count_tokens`
 - `POST /v1/chat/completions`
 - `GET /v1/models`
-- Non-streaming and SSE streaming responses
-- Claude Code tool use / tool result translation
-- OpenAI-compatible pass-through for opencode, OpenAI SDKs, LiteLLM-style clients, and similar tools
-- YAML model routing from public model names to provider-specific upstream models
-- Docker, GHCR, and Kubernetes deployment assets
+- 非串流與 SSE 串流回應
+- Claude Code 常用的 tool use / tool result 轉換
+- OpenAI-compatible pass-through，給 opencode、OpenAI SDK、LiteLLM 類工具使用
+- YAML model routing，可把公開 model name 對應到不同 provider / upstream model
+- Docker 與 Kubernetes 部署
 
-## Environment
+## 環境變數
 
-| Variable | Required | Description |
+| 變數 | 必填 | 說明 |
 | --- | --- | --- |
-| `MODEL_CONFIG_PATH` | No | YAML routing config path. Defaults to `config.yaml`; if missing, the proxy falls back to legacy env mode. |
-| `PROXY_AUTH_TOKEN` | No | If set, clients must send the same token through Bearer auth, `x-api-key`, or `anthropic-api-key`. |
-| `OPENAI_API_KEY` | Depends | OpenAI API key. The example `openai` provider reads this by default. |
-| `OPENROUTER_API_KEY` | Depends | OpenRouter API key. The example `openrouter` provider reads this by default. |
-| `OLLAMA_BASE_URL` | No | Ollama OpenAI-compatible base URL, for example `http://localhost:11434/v1`. |
-| `OPENAI_API_ENDPOINT` | No | Legacy env-mode OpenAI-compatible base URL, for example `https://api.openai.com/v1`. |
-| `OPENAI_MODEL` | No | Legacy env-mode upstream model. Defaults to `gpt-5.5`. |
-| `MODEL_MAPPING_JSON` | No | Legacy env-mode JSON object for mapping Claude model names to upstream model names. |
-| `PUBLIC_MODELS` | No | Legacy env-mode model list returned by `/v1/models`. |
-| `REQUEST_TIMEOUT_SECONDS` | No | Upstream request timeout. Defaults to `600`. |
+| `MODEL_CONFIG_PATH` | 否 | YAML routing config 路徑；預設會找 `config.yaml`，不存在時 fallback 到 legacy env 模式 |
+| `PROXY_AUTH_TOKEN` | 否 | 若設定，client 必須用 Bearer token、`x-api-key` 或 `anthropic-api-key` 傳入相同 token |
+| `OPENAI_API_KEY` | 視設定 | OpenAI API key；YAML 的 `openai` provider 預設讀這個 |
+| `OPENROUTER_API_KEY` | 視設定 | OpenRouter API key；YAML 的 `openrouter` provider 預設讀這個 |
+| `OLLAMA_BASE_URL` | 否 | Ollama OpenAI-compatible base URL，例如 `http://localhost:11434/v1` |
+| `OPENAI_API_ENDPOINT` | 否 | Legacy env 模式的 OpenAI-compatible base URL，例如 `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | 否 | Legacy env 模式固定轉送到的 model；預設 `gpt-5.5` |
+| `MODEL_MAPPING_JSON` | 否 | JSON object，用來把 Claude model name 映射到 OpenAI model |
+| `PUBLIC_MODELS` | 否 | `/v1/models` 回傳給 client 的 model 清單 |
+| `REQUEST_TIMEOUT_SECONDS` | 否 | 上游 API timeout，預設 `600` |
 
-Start from the examples:
+範例：
 
 ```bash
 cp .env.example .env
 cp config.example.yaml config.yaml
 ```
 
-`.env`:
+`.env`：
 
 ```dotenv
 OPENAI_API_KEY=sk-...
@@ -48,11 +48,11 @@ PROXY_AUTH_TOKEN=local-shared-token
 MODEL_CONFIG_PATH=config.yaml
 ```
 
-If `MODEL_CONFIG_PATH` / `config.yaml` is not provided, the proxy uses legacy env mode and routes public models to `OPENAI_MODEL`.
+如果沒有提供 `MODEL_CONFIG_PATH` / `config.yaml`，服務會用 legacy env 模式：所有公開 model 都會轉到 `OPENAI_MODEL`。
 
-## YAML Routing
+## YAML 模型路由
 
-`config.example.yaml` includes OpenAI, OpenRouter, and Ollama provider examples:
+`config.example.yaml` 內建 OpenAI、OpenRouter、Ollama 三種 provider 範例：
 
 ```yaml
 default_model: proxy-default
@@ -86,16 +86,16 @@ models:
     model: gpt-oss:20b
 ```
 
-When a client sends `model: openrouter-gpt-5.5`, the proxy routes the request to OpenRouter model `openai/gpt-5.5`. Ad hoc `provider:model` routing is also supported, for example `openrouter:anthropic/claude-sonnet-4.6`.
+Client 對 proxy 送 `model: openrouter-gpt-5.5` 時，proxy 會轉到 OpenRouter 的 `openai/gpt-5.5`。`provider:model` 也支援臨時 passthrough，例如 `openrouter:anthropic/claude-sonnet-4.6`。
 
-## Local Run
+## 本機執行
 
 ```bash
 uv sync
 uv run uvicorn claude_code_proxy.server:app --host 0.0.0.0 --port 8080
 ```
 
-Health and readiness:
+健康檢查：
 
 ```bash
 curl http://localhost:8080/healthz
@@ -109,7 +109,7 @@ docker build -t claude-code-proxy:latest .
 docker run --rm --env-file .env -p 8080:8080 claude-code-proxy:latest
 ```
 
-Run with YAML routing:
+使用 YAML routing：
 
 ```bash
 docker run --rm --env-file .env \
@@ -118,13 +118,13 @@ docker run --rm --env-file .env \
   claude-code-proxy:latest
 ```
 
-Or use Compose:
+或：
 
 ```bash
 docker compose up --build
 ```
 
-`docker-compose.yml` mounts `config.example.yaml` as `/app/config.yaml` by default. To use your own config, set this in `.env`:
+`docker-compose.yml` 預設會把 `config.example.yaml` 掛成容器內的 `/app/config.yaml`。要使用自己的設定檔時，在 `.env` 加：
 
 ```dotenv
 LOCAL_MODEL_CONFIG_PATH=./config.yaml
@@ -133,31 +133,31 @@ MODEL_CONFIG_PATH=/app/config.yaml
 
 ## GHCR Image
 
-The repository includes `.github/workflows/docker-image.yml`. Pushes to `main` and `v*.*.*` tags build a multi-arch image and publish it to GitHub Container Registry.
+此 repo 內建 GitHub Actions workflow：`.github/workflows/docker-image.yml`。推送到 `main` 或推送 `v*.*.*` tag 時會自動 build multi-arch image，並推到 GitHub Container Registry。
 
-Image name:
+Image 名稱：
 
 ```text
 ghcr.io/<owner>/<repo>
 ```
 
-Pull and run:
+下載與執行：
 
 ```bash
 docker pull ghcr.io/<owner>/<repo>:latest
 docker run --rm --env-file .env -p 8080:8080 ghcr.io/<owner>/<repo>:latest
 ```
 
-If the GHCR package is private, log in first:
+如果 GHCR package 是 private，先登入：
 
 ```bash
 echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
 docker pull ghcr.io/<owner>/<repo>:latest
 ```
 
-`GHCR_TOKEN` needs `read:packages`.
+`GHCR_TOKEN` 需要有 `read:packages` 權限。
 
-## Claude Code
+## Claude Code 設定
 
 ```bash
 unset ANTHROPIC_API_KEY
@@ -169,9 +169,9 @@ export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
 claude
 ```
 
-Set `ANTHROPIC_BASE_URL` to the service root, without `/v1`. Claude Code will call `/v1/messages` itself.
+`ANTHROPIC_BASE_URL` 請填 service root，不要加 `/v1`，Claude Code 會自行呼叫 `/v1/messages`。
 
-To keep Claude model names at the client layer, add aliases to `config.yaml`:
+如果想保留 Claude model name，再由 proxy 映射，請在 `config.yaml` 的 model route 加上 alias：
 
 ```yaml
 models:
@@ -183,11 +183,11 @@ models:
       - claude-opus-4-7
 ```
 
-## opencode
+## opencode 設定
 
-opencode can connect through `@ai-sdk/openai-compatible`. Point `baseURL` at `/v1`:
+opencode 可用 `@ai-sdk/openai-compatible` 對接 proxy。`baseURL` 要指到 `/v1`：
 
-`~/.config/opencode/opencode.jsonc`:
+`~/.config/opencode/opencode.jsonc`：
 
 ```jsonc
 {
@@ -219,16 +219,16 @@ opencode can connect through `@ai-sdk/openai-compatible`. Point `baseURL` at `/v
 }
 ```
 
-Then run:
+然後：
 
 ```bash
 export PROXY_AUTH_TOKEN=local-shared-token
 opencode
 ```
 
-## Default Model Examples
+## 預設模型建議
 
-These example model names were refreshed on 2026-05-26 from official docs and the OpenRouter models API.
+以下名稱是 2026-05-26 重新查官方文件與 OpenRouter model API 後更新的範例：
 
 | Provider | Route | Upstream model |
 | --- | --- | --- |
@@ -241,17 +241,17 @@ These example model names were refreshed on 2026-05-26 from official docs and th
 | OpenRouter | `openrouter-qwen3-coder-plus` | `qwen/qwen3-coder-plus` |
 | Ollama | `ollama-gpt-oss-20b` | `gpt-oss:20b` |
 
-Pull the Ollama model before using it:
+Ollama 使用前需要先 pull model：
 
 ```bash
 ollama pull gpt-oss:20b
 ```
 
-## Avoiding Anthropic API Usage
+## 避免走到 Anthropic API
 
-Before starting Claude Code, unset `ANTHROPIC_API_KEY` and pin `ANTHROPIC_BASE_URL` to this proxy. For `claude --bare` tests, you can set `ANTHROPIC_API_KEY` to the same value as `PROXY_AUTH_TOKEN`; the request still goes to `ANTHROPIC_BASE_URL`.
+建議啟動 Claude Code 前先 `unset ANTHROPIC_API_KEY`，並固定設定 `ANTHROPIC_BASE_URL` 指向這個 proxy。若你用 `claude --bare` 做測試，可以把 `ANTHROPIC_API_KEY` 設成 `PROXY_AUTH_TOKEN` 的值，因為請求仍會送到 `ANTHROPIC_BASE_URL` 指定的 proxy。
 
-Minimal test:
+最小實測範例：
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8080 \
@@ -265,45 +265,45 @@ claude --bare --no-session-persistence --tools "" -p \
   "Reply with exactly: claude-proxy-ok"
 ```
 
-The proxy logs the actual upstream model:
+Proxy log 會印出實際送到上游的 model，例如：
 
 ```text
 proxying anthropic message provider=openai upstream_model=gpt-5.5 public_model=proxy-default stream=True
 ```
 
-Claude Code may still label local `modelUsage` as `claude-sonnet-*`; use the proxy log to confirm the upstream model.
+Claude Code 的 `modelUsage` 仍可能標成 `claude-sonnet-*`，那是 Claude Code 依傳入 model name 做的本地估算欄位；是否有轉到 OpenAI 要看 proxy log 的 `upstream_model`。
 
 ## Kubernetes
 
 ```bash
 cp k8s/secret.example.yaml /tmp/claude-code-proxy-secret.yaml
-# edit /tmp/claude-code-proxy-secret.yaml
+# 編輯 /tmp/claude-code-proxy-secret.yaml
 kubectl apply -f /tmp/claude-code-proxy-secret.yaml
 kubectl apply -f k8s/configmap.example.yaml
 kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
 ```
 
-Before deploying, update the image in `k8s/deployment.yaml`:
+部署到 cluster 前，把 `k8s/deployment.yaml` 裡的 image 換成 GHCR image：
 
 ```yaml
 image: ghcr.io/<owner>/<repo>:latest
 ```
 
-Port-forward for local testing:
+本機測試 cluster service：
 
 ```bash
 kubectl port-forward svc/claude-code-proxy 8080:80
 ```
 
-## Limits
+## 限制
 
-- Anthropic-only features such as `thinking`, prompt caching, and Anthropic server tools are ignored or degraded.
-- `/v1/messages/count_tokens` is an approximation, not an exact OpenAI tokenizer count.
-- Image blocks are converted to OpenAI `image_url` content parts. Actual support depends on the upstream model.
-- Ollama's OpenAI compatibility is an adapter layer. Tool, vision, and JSON mode support depend on the local model.
-- OpenRouter, Ollama, and other OpenAI-compatible providers may differ in supported request fields. Use provider `headers` and route `extra_body` in YAML for provider-specific tuning.
+- `thinking`、prompt caching、Anthropic server tools 等 Anthropic-only 功能會被忽略或降級。
+- `/v1/messages/count_tokens` 是近似值，不是 OpenAI tokenizer 的精確結果。
+- 圖片 block 會轉成 OpenAI `image_url` content part，實際可用性取決於上游 model。
+- Ollama 的 OpenAI compatibility 是相容層，具體 tool / vision / JSON mode 支援仍取決於本地 model。
+- OpenRouter、Ollama 與其他 OpenAI-compatible provider 可能有不同參數支援；可用 YAML route 的 `extra_body` 與 provider 的 `headers` 做細節調整。
 
-## References
+## 參考文件
 
 - Claude Code environment variables: https://code.claude.com/docs/en/env-vars
 - Claude streaming Messages API: https://platform.claude.com/docs/en/build-with-claude/streaming
