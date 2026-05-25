@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | `OPENAI_API_ENDPOINT` | 是 | OpenAI API base URL，例如 `https://api.openai.com/v1` |
 | `OPENAI_API_KEY` | 是 | OpenAI API key |
-| `OPENAI_MODEL` | 建議 | 固定轉送到的 OpenAI model；預設 `gpt-4o` |
+| `OPENAI_MODEL` | 建議 | 固定轉送到的 OpenAI model；預設 `gpt-5.5` |
 | `PROXY_AUTH_TOKEN` | 否 | 若設定，Claude Code 必須用 `ANTHROPIC_AUTH_TOKEN` 或 `ANTHROPIC_API_KEY` 傳入相同 token |
 | `MODEL_MAPPING_JSON` | 否 | JSON object，用來把 Claude model name 映射到 OpenAI model |
 | `PUBLIC_MODELS` | 否 | `/v1/models` 回傳給 Claude Code 的 model 清單 |
@@ -37,9 +37,9 @@ cp .env.example .env
 ```dotenv
 OPENAI_API_ENDPOINT=https://api.openai.com/v1
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-5.5
 PROXY_AUTH_TOKEN=local-shared-token
-MODEL_MAPPING_JSON={"proxy-default":"gpt-4o","claude-sonnet-4-5":"gpt-4o"}
+MODEL_MAPPING_JSON={"proxy-default":"gpt-5.5","claude-sonnet-4-5":"gpt-5.5"}
 ```
 
 ## 本機執行
@@ -68,6 +68,44 @@ docker run --rm --env-file .env -p 8080:8080 claude-code-proxy:latest
 docker compose up --build
 ```
 
+## GHCR Image
+
+此 repo 內建 GitHub Actions workflow：`.github/workflows/docker-image.yml`。推送到 `main` 或推送 `v*.*.*` tag 時會自動 build multi-arch image，並推到 GitHub Container Registry。
+
+產生的 image 名稱會是：
+
+```text
+ghcr.io/<owner>/<repo>
+```
+
+常用 tag：
+
+- `latest`：default branch 的最新 build
+- `sha-<commit>`：指定 commit build
+- `<version>`：從 `v1.2.3` 這類 tag 產生，例如 `1.2.3`
+- `<major>.<minor>`：例如 `1.2`
+
+下載 image：
+
+```bash
+docker pull ghcr.io/<owner>/<repo>:latest
+```
+
+直接執行：
+
+```bash
+docker run --rm --env-file .env -p 8080:8080 ghcr.io/<owner>/<repo>:latest
+```
+
+如果 GHCR package 還是 private，先登入：
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u <github-username> --password-stdin
+docker pull ghcr.io/<owner>/<repo>:latest
+```
+
+`GHCR_TOKEN` 需要有 `read:packages` 權限。若要讓其他人免登入下載，請到 GitHub package 頁面把 visibility 改成 public。
+
 ## Claude Code 設定
 
 Claude Code 官方文件提供 `ANTHROPIC_BASE_URL` 用來把 API 請求導到 proxy/gateway，`ANTHROPIC_AUTH_TOKEN` 會被送成 Bearer token。
@@ -87,7 +125,7 @@ claude
 如果你想保留 Claude model name，再由 proxy 映射：
 
 ```dotenv
-MODEL_MAPPING_JSON={"proxy-default":"gpt-4o","claude-sonnet-4-5":"gpt-4o"}
+MODEL_MAPPING_JSON={"proxy-default":"gpt-5.5","claude-sonnet-4-5":"gpt-5.5"}
 ```
 
 ### 避免走到 Anthropic API
@@ -111,7 +149,7 @@ claude --bare --no-session-persistence --tools "" -p \
 Proxy log 會印出實際送到上游的 model，例如：
 
 ```text
-proxying message request upstream_model=gpt-4o stream=True
+proxying message request upstream_model=gpt-5.5 stream=True
 ```
 
 Claude Code 的輸出仍可能把 `modelUsage` 標成 `claude-sonnet-*`，那是 Claude Code 依傳入 model name 做的本地估算欄位；是否有轉到 OpenAI 要看 proxy log 的 `upstream_model`。
@@ -125,6 +163,12 @@ cp k8s/secret.example.yaml /tmp/claude-code-proxy-secret.yaml
 # 編輯 /tmp/claude-code-proxy-secret.yaml
 kubectl apply -f /tmp/claude-code-proxy-secret.yaml
 kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+```
+
+部署到 cluster 前，把 `k8s/deployment.yaml` 裡的 image 換成 GHCR image：
+
+```yaml
+image: ghcr.io/<owner>/<repo>:latest
 ```
 
 本機測試 cluster service：
