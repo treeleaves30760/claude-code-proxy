@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-code-proxy
+  labels:
+    app.kubernetes.io/name: claude-code-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: claude-code-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: claude-code-proxy
+    spec:
+      containers:
+        - name: proxy
+          image: claude-code-proxy:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: OPENAI_API_ENDPOINT
+              value: https://api.openai.com/v1
+            - name: OPENAI_CHAT_COMPLETIONS_PATH
+              value: /chat/completions
+            - name: OPENAI_MODEL
+              value: gpt-5.5
+            - name: OPENAI_MAX_TOKENS_FIELD
+              value: auto
+            - name: OPENAI_STREAM_INCLUDE_USAGE
+              value: "false"
+            - name: REQUEST_TIMEOUT_SECONDS
+              value: "600"
+            - name: PUBLIC_MODELS
+              value: claude-sonnet-4-5,claude-opus-4-5
+            - name: MODEL_MAPPING_JSON
+              value: '{"claude-sonnet-4-5":"gpt-5.5","claude-opus-4-5":"gpt-5.5"}'
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-proxy-secrets
+                  key: OPENAI_API_KEY
+            - name: PROXY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-proxy-secrets
+                  key: PROXY_AUTH_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
